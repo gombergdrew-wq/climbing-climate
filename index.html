@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Crag Climate — 30 years of warming at the world's climbing areas</title>
+  <meta name="description" content="Dynamic charts comparing 30 years of historical temperature, precipitation, and snowfall at major climbing areas around the world." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧗</text></svg>" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="site-header">
+      <p class="eyebrow">🧗 Crag Climate</p>
+      <h1>30 years of warming at the world's classic climbing areas</h1>
+      <p class="lede">
+        Live historical weather for <span id="areaCount">22</span> crags and climbing valleys across six continents,
+        pulled straight from the <a href="https://open-meteo.com/en/docs/historical-weather-api" target="_blank" rel="noopener">Open-Meteo
+        Historical Weather API</a> (ERA5 reanalysis) — nothing here is pre-baked, every chart recomputes from
+        <span id="yearRange">1996–2025</span> daily data in your browser.
+      </p>
+    </header>
+
+    <section id="statusBanner" class="status-banner" hidden></section>
+
+    <section class="panel controls" aria-label="Choose areas and metric">
+      <div class="control-block">
+        <h2>Compare climbing areas <span class="hint">(pick up to <span id="maxSelected">5</span>)</span></h2>
+        <div id="areaGrid" class="area-grid" role="group" aria-label="Climbing areas"></div>
+      </div>
+
+      <div class="control-block">
+        <h2>Metric</h2>
+        <div id="metricTabs" class="metric-tabs" role="tablist" aria-label="Metric"></div>
+      </div>
+
+      <div class="control-block unit-toggle">
+        <h2>Units</h2>
+        <div class="segmented" id="unitToggle" role="group" aria-label="Temperature units">
+          <button type="button" data-unit="C" class="is-active">°C</button>
+          <button type="button" data-unit="F">°F</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="stat-tiles" id="statTiles" aria-label="Warming since baseline decade"></section>
+
+    <section class="panel chart-panel">
+      <div class="chart-head">
+        <h2 id="trendTitle">Metric by year</h2>
+        <p class="chart-sub" id="trendSub"></p>
+      </div>
+      <div class="chart-wrap chart-wrap--tall">
+        <canvas id="trendChart" role="img" aria-label="Line chart of the selected metric by year for each selected area"></canvas>
+      </div>
+      <details class="data-table-toggle">
+        <summary>View data table</summary>
+        <table id="trendTable"><caption>Yearly values by area</caption></table>
+      </details>
+    </section>
+
+    <section class="panel chart-panel">
+      <div class="chart-head">
+        <h2 id="decadeTitle">Baseline decade vs. recent decade</h2>
+        <p class="chart-sub" id="decadeSub"></p>
+      </div>
+      <div class="chart-wrap">
+        <canvas id="decadeChart" role="img" aria-label="Bar chart comparing baseline decade and recent decade averages by area"></canvas>
+      </div>
+      <details class="data-table-toggle">
+        <summary>View data table</summary>
+        <table id="decadeTable"><caption>Decade averages by area</caption></table>
+      </details>
+    </section>
+
+    <section class="panel chart-panel">
+      <div class="chart-head">
+        <h2>Global warming ranking</h2>
+        <p class="chart-sub" id="rankingSub">All <span id="areaCount2">22</span> areas, ranked by change per decade for the selected metric.</p>
+      </div>
+      <div class="chart-wrap chart-wrap--ranking">
+        <canvas id="rankingChart" role="img" aria-label="Horizontal bar chart ranking all climbing areas by trend per decade"></canvas>
+      </div>
+      <details class="data-table-toggle">
+        <summary>View data table</summary>
+        <table id="rankingTable"><caption>Trend per decade, all areas</caption></table>
+      </details>
+    </section>
+
+    <footer class="site-footer">
+      <p>
+        Data: <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a> Historical Weather API,
+        derived from the ECMWF ERA5 reanalysis. Trends are ordinary-least-squares fits over the trailing 30 complete
+        years and are meant to illustrate direction and rough magnitude, not serve as a peer-reviewed climate record.
+        "Prime climbing days" and "too hot to send" are simple daily-high heuristics (10–24°C / &gt;32°C), not a
+        substitute for local route/season knowledge.
+      </p>
+      <p><a href="https://github.com/gombergdrew-wq/climbing-climate" target="_blank" rel="noopener">Source on GitHub</a></p>
+    </footer>
+  </div>
+
+  <script src="vendor/chart.umd.js"></script>
+  <script src="areas.js"></script>
+  <script src="climate.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
