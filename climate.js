@@ -46,13 +46,10 @@ function unitLabel(metric, unit) {
   return metric.unitC;
 }
 
-// Open-Meteo accepts comma-separated lat/lon lists and batches them into one
-// request, returning an array of results in the same order — this lets the
-// whole roster load in a single round trip instead of one call per area.
-function buildBatchUrl(areas) {
+function buildUrl(area) {
   const params = new URLSearchParams({
-    latitude: areas.map((a) => a.lat).join(","),
-    longitude: areas.map((a) => a.lon).join(","),
+    latitude: area.lat,
+    longitude: area.lon,
     start_date: `${START_YEAR}-01-01`,
     end_date: `${END_YEAR}-12-31`,
     daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,snowfall_sum",
@@ -143,9 +140,31 @@ function aggregateYearly(daily) {
     }));
 }
 
-// Fetches yearly stats for whichever of `areas` aren't already cached
-// (in one batched request), and returns a Map of areaId -> yearly rows for
-// every area passed in, cached or not.
+async function fetchOneYearly(area) {
+  const res = await fetch(buildUrl(area));
+  if (!res.ok) {
+    let reason = `HTTP ${res.status}`;
+    try {
+      const errJson = await res.json();
+      if (errJson && errJson.reason) reason = errJson.reason;
+    } catch (err) {
+      // body wasn't JSON — keep the generic HTTP status reason
+    }
+    throw new Error(`${area.name}: ${reason}`);
+  }
+  const json = await res.json();
+  if (!json.daily || !Array.isArray(json.daily.time) || json.daily.time.length === 0) {
+    throw new Error(`${area.name}: no data returned`);
+  }
+  const yearly = aggregateYearly(json.daily);
+  writeCache(area.id, yearly);
+  return yearly;
+}
+
+// Fetches yearly stats for whichever of `areas` aren't already cached (one
+// request per area, run concurrently), and returns a Map of areaId -> yearly
+// rows for every area that succeeded. Areas that fail are simply left out —
+// the caller treats a missing id as "couldn't load this one."
 async function ensureYearlyData(areas) {
   const results = new Map();
   const needed = [];
@@ -159,30 +178,18 @@ async function ensureYearlyData(areas) {
   }
   if (needed.length === 0) return results;
 
-  const res = await fetch(buildBatchUrl(needed));
-  if (!res.ok) {
-    throw new Error(`Open-Meteo returned ${res.status}`);
-  }
-  const json = await res.json();
-  const rows = Array.isArray(json) ? json : [json];
-  if (rows.length !== needed.length) {
-    throw new Error("Open-Meteo returned an unexpected number of results");
-  }
-
-  let anySucceeded = false;
-  needed.forEach((area, i) => {
-    const daily = rows[i] && rows[i].daily;
-    if (!daily || !Array.isArray(daily.time) || daily.time.length === 0) {
-      return; // leave this area out of `results`; caller treats it as failed
+  const settled = await Promise.allSettled(needed.map((area) => fetchOneYearly(area)));
+  let firstError = null;
+  settled.forEach((outcome, i) => {
+    if (outcome.status === "fulfilled") {
+      results.set(needed[i].id, outcome.value);
+    } else if (!firstError) {
+      firstError = outcome.reason;
     }
-    const yearly = aggregateYearly(daily);
-    writeCache(area.id, yearly);
-    results.set(area.id, yearly);
-    anySucceeded = true;
   });
 
-  if (!anySucceeded && needed.length > 0) {
-    throw new Error("Open-Meteo returned no usable data");
+  if (results.size === 0 && firstError) {
+    throw firstError;
   }
   return results;
 }
