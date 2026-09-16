@@ -16,29 +16,41 @@ years of daily temperature/precipitation/snowfall directly from the free
 (derived from the ECMWF ERA5 reanalysis) for every area — one batched
 request — then computes everything client-side:
 
-- Yearly averages/counts per area (avg high/low, freezing days, "prime
+- Per-month averages/counts per area (avg high/low, freezing days, "prime
   climbing days," days too hot to send, precipitation, snowfall)
-- A linear trend (change per decade) per area and metric
+- A linear trend (change per decade) per area and metric, for the whole
+  year or for just a chosen month/season
 - Baseline decade (first 10 years) vs. recent decade (last 10 years)
   comparisons
 - A global ranking of all 22 areas by warming trend for the selected metric
 
-Results are cached in `localStorage` so repeat visits don't re-fetch. Because
-everything runs in the browser, the charts are genuinely dynamic — pick any
-combination of up to 5 areas, any metric, °C or °F — with no server to keep
-running and nothing to redeploy when the "data" changes (there isn't any
-to redeploy; it's always live).
+Daily data is reduced to per-(year, month) sums/counts before caching in
+`localStorage` — compact, and enough to derive a whole-year view *or* any
+month/season view (e.g. "just October," "just Winter") without re-fetching.
+Because everything runs in the browser, the charts are genuinely dynamic —
+pick any combination of up to 5 areas, any metric, any time of year, °C or
+°F — with no server to keep running and nothing to redeploy when the "data"
+changes (there isn't any to redeploy; it's always live).
+
+Season presets (Winter/Spring/Summer/Fall) use fixed Northern-Hemisphere
+calendar months for every area, rather than flipping per hemisphere, so a
+comparison always means "the same months" — e.g. "Winter" is Dec–Feb at
+both Yosemite and Rocklands, South Africa, even though that's summer for
+one of them locally.
 
 ## Metrics
 
+All metrics are computed over whichever time-of-year window is selected
+(whole year, a season, or a single month):
+
 | Metric | Definition |
 |---|---|
-| Avg daily high / low / annual | Mean of ERA5 daily max/min 2m temperature |
-| Freezing days / year | Days with a low below 0°C |
-| Prime climbing days / year | Days with a high between 10–24°C (a common "good sending weather" heuristic) |
-| Hot days / year | Days with a high above 32°C |
-| Annual precipitation | Sum of daily precipitation (mm) |
-| Annual snowfall | Sum of daily snowfall (cm) |
+| Avg daily high / low / temperature | Mean of ERA5 daily max/min 2m temperature |
+| Freezing days | Days with a low below 0°C |
+| Prime climbing days | Days with a high between 10–24°C (a common "good sending weather" heuristic) |
+| Hot days | Days with a high above 32°C |
+| Precipitation | Sum of daily precipitation (mm) |
+| Snowfall | Sum of daily snowfall (cm) |
 
 These are simple, transparent heuristics meant to make a 30-year trend
 legible at a glance — not a substitute for local route or season knowledge,

@@ -1,6 +1,7 @@
 (function () {
-  const { METRICS, metricByKey, START_YEAR, END_YEAR, BASELINE_RANGE, RECENT_RANGE,
-    ensureYearlyData, linearFit, trendPerDecade, averageOverRange, valueToDisplay,
+  const { METRICS, metricByKey, TIME_OF_YEAR_PRESETS, timeOfYearById,
+    START_YEAR, END_YEAR, BASELINE_RANGE, RECENT_RANGE,
+    ensureMonthlyData, deriveYearly, linearFit, trendPerDecade, averageOverRange, valueToDisplay,
     celsiusDeltaToDisplay, unitLabel } = window.ClimateData;
 
   const PALETTE_VARS = ["--series-1", "--series-2", "--series-3", "--series-4", "--series-5"];
@@ -10,19 +11,35 @@
   const state = {
     selectedOrder: DEFAULT_SELECTED_IDS.slice(0, MAX_SELECTED),
     metricKey: "meanHigh",
+    timeOfYearId: "year",
     unit: "C",
-    yearlyById: new Map(),
+    monthlyById: new Map(),
     failedIds: new Set(),
   };
 
   const els = {};
-  ["areaGrid", "metricTabs", "unitToggle", "statTiles", "statusBanner",
+  ["areaGrid", "metricTabs", "timeOfYearSelect", "unitToggle", "statTiles", "statusBanner",
     "trendChart", "trendTable", "trendTitle", "trendSub",
     "decadeChart", "decadeTable", "decadeTitle", "decadeSub",
     "rankingChart", "rankingTable", "rankingSub",
     "areaCount", "areaCount2", "yearRange", "maxSelected"].forEach((id) => {
     els[id] = document.getElementById(id);
   });
+
+  function currentFilter() {
+    const t = timeOfYearById(state.timeOfYearId);
+    return t.from == null ? null : { from: t.from, to: t.to };
+  }
+
+  function yearlyFor(id) {
+    const monthly = state.monthlyById.get(id);
+    return monthly ? deriveYearly(monthly, currentFilter()) : null;
+  }
+
+  function timeOfYearSuffix() {
+    const t = timeOfYearById(state.timeOfYearId);
+    return t.id === "year" ? "" : ` — ${t.label}`;
+  }
 
   let trendChart, decadeChart, rankingChart;
 
@@ -166,6 +183,33 @@
     }
   }
 
+  function renderTimeOfYearSelect() {
+    els.timeOfYearSelect.innerHTML = "";
+    let currentGroup = null;
+    let groupEl = els.timeOfYearSelect;
+    for (const preset of TIME_OF_YEAR_PRESETS) {
+      if (preset.group !== currentGroup) {
+        currentGroup = preset.group;
+        if (preset.group) {
+          groupEl = document.createElement("optgroup");
+          groupEl.label = preset.group;
+          els.timeOfYearSelect.appendChild(groupEl);
+        } else {
+          groupEl = els.timeOfYearSelect;
+        }
+      }
+      const opt = document.createElement("option");
+      opt.value = preset.id;
+      opt.textContent = preset.label;
+      groupEl.appendChild(opt);
+    }
+    els.timeOfYearSelect.value = state.timeOfYearId;
+    els.timeOfYearSelect.addEventListener("change", () => {
+      state.timeOfYearId = els.timeOfYearSelect.value;
+      renderAll();
+    });
+  }
+
   function initUnitToggle() {
     els.unitToggle.querySelectorAll("button").forEach((btn) => {
       btn.addEventListener("click", () => {
@@ -195,8 +239,8 @@
   async function loadData() {
     setStatus("loading", `Loading ${YEARS.length} years of daily weather for ${CLIMBING_AREAS.length} climbing areas from Open-Meteo…`);
     try {
-      const results = await ensureYearlyData(CLIMBING_AREAS);
-      state.yearlyById = results;
+      const results = await ensureMonthlyData(CLIMBING_AREAS);
+      state.monthlyById = results;
       state.failedIds = new Set(CLIMBING_AREAS.filter((a) => !results.has(a.id)).map((a) => a.id));
       if (state.failedIds.size === CLIMBING_AREAS.length) {
         throw new Error("No areas returned data");
@@ -235,7 +279,7 @@
     els.statTiles.innerHTML = "";
     state.selectedOrder.forEach((id, idx) => {
       const area = areaById(id);
-      const yearly = state.yearlyById.get(id);
+      const yearly = yearlyFor(id);
       const tile = document.createElement("div");
       tile.className = "stat-tile";
       tile.style.setProperty("--chip-color", colorForIndex(idx));
@@ -263,13 +307,13 @@
 
   function renderTrendChart() {
     const metric = metricByKey(state.metricKey);
-    els.trendTitle.textContent = `${metric.label} by year`;
+    els.trendTitle.textContent = `${metric.label} by year${timeOfYearSuffix()}`;
     els.trendSub.textContent = `${START_YEAR}–${END_YEAR}, dashed line = linear trend`;
 
     const datasets = [];
     state.selectedOrder.forEach((id, idx) => {
       const area = areaById(id);
-      const yearly = state.yearlyById.get(id);
+      const yearly = yearlyFor(id);
       const color = colorForIndex(idx);
       if (!yearly) return;
 
@@ -322,11 +366,12 @@
 
   function renderTrendTable(metric) {
     const table = els.trendTable;
-    const ids = state.selectedOrder.filter((id) => state.yearlyById.get(id));
+    const ids = state.selectedOrder.filter((id) => yearlyFor(id));
+    const yearlyByAreaId = new Map(ids.map((id) => [id, yearlyFor(id)]));
     let html = "<thead><tr><th>Year</th>" + ids.map((id) => `<th>${areaById(id).name}</th>`).join("") + "</tr></thead><tbody>";
     for (const y of YEARS) {
       html += `<tr><td>${y}</td>` + ids.map((id) => {
-        const row = state.yearlyById.get(id).find((r) => r.year === y);
+        const row = yearlyByAreaId.get(id).find((r) => r.year === y);
         return `<td>${row ? formatValue(row[metric.key], metric, state.unit) : "—"}</td>`;
       }).join("") + "</tr>";
     }
@@ -336,12 +381,13 @@
 
   function renderDecadeChart() {
     const metric = metricByKey(state.metricKey);
-    els.decadeTitle.textContent = `${metric.label}: ${BASELINE_RANGE[0]}–${BASELINE_RANGE[1]} vs. ${RECENT_RANGE[0]}–${RECENT_RANGE[1]}`;
+    els.decadeTitle.textContent = `${metric.label}${timeOfYearSuffix()}: ${BASELINE_RANGE[0]}–${BASELINE_RANGE[1]} vs. ${RECENT_RANGE[0]}–${RECENT_RANGE[1]}`;
     els.decadeSub.textContent = "First vs. most recent decade of the 30-year window, averaged.";
 
-    const ids = state.selectedOrder.filter((id) => state.yearlyById.get(id));
-    const baselineVals = ids.map((id) => valueToDisplay(averageOverRange(state.yearlyById.get(id), metric.key, BASELINE_RANGE), metric, state.unit));
-    const recentVals = ids.map((id) => valueToDisplay(averageOverRange(state.yearlyById.get(id), metric.key, RECENT_RANGE), metric, state.unit));
+    const ids = state.selectedOrder.filter((id) => yearlyFor(id));
+    const yearlyByAreaId = new Map(ids.map((id) => [id, yearlyFor(id)]));
+    const baselineVals = ids.map((id) => valueToDisplay(averageOverRange(yearlyByAreaId.get(id), metric.key, BASELINE_RANGE), metric, state.unit));
+    const recentVals = ids.map((id) => valueToDisplay(averageOverRange(yearlyByAreaId.get(id), metric.key, RECENT_RANGE), metric, state.unit));
 
     const cfg = {
       type: "bar",
@@ -370,10 +416,10 @@
 
   function renderRankingChart() {
     const metric = metricByKey(state.metricKey);
-    els.rankingSub.innerHTML = `All <span>${CLIMBING_AREAS.length}</span> areas, ranked by change per decade in ${metric.label.toLowerCase()}.`;
+    els.rankingSub.innerHTML = `All <span>${CLIMBING_AREAS.length}</span> areas, ranked by change per decade in ${metric.label.toLowerCase()}${timeOfYearSuffix()}.`;
 
     const rows = CLIMBING_AREAS
-      .map((area) => ({ area, trend: state.yearlyById.has(area.id) ? trendPerDecade(state.yearlyById.get(area.id), metric.key) : null }))
+      .map((area) => ({ area, trend: state.monthlyById.has(area.id) ? trendPerDecade(yearlyFor(area.id), metric.key) : null }))
       .filter((r) => r.trend != null)
       .map((r) => ({ ...r, score: metric.warmingIsUp === null ? r.trend : (metric.warmingIsUp ? r.trend : -r.trend) }))
       .sort((a, b) => b.score - a.score);
@@ -443,10 +489,11 @@
   initChrome();
   renderAreaGrid();
   renderMetricTabs();
+  renderTimeOfYearSelect();
   initUnitToggle();
   loadData();
 
   window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
-    if (state.yearlyById.size > 0) renderAll();
+    if (state.monthlyById.size > 0) renderAll();
   });
 })();

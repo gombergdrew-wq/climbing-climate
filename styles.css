@@ -166,6 +166,17 @@ a { color: var(--series-1); }
   color: #fff;
 }
 
+.time-of-year-select {
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--text-primary);
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  max-width: 100%;
+}
+
 .segmented { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .segmented button {
   padding: 7px 14px;
