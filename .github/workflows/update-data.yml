@@ -1,0 +1,47 @@
+name: Update climate data
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Monthly on the 1st. Climate data doesn't move fast — this keeps the
+    # 30-year window rolling forward without hitting Open-Meteo on every
+    # site visit.
+    - cron: "17 6 1 * *"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/fetch-data.js"
+      - "areas.js"
+      - ".github/workflows/update-data.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-data
+  cancel-in-progress: false
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Fetch and aggregate weather data
+        run: node scripts/fetch-data.js
+
+      - name: Commit updated data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/monthly.json
+          if git diff --staged --quiet; then
+            echo "No data changes."
+          else
+            git commit -m "Update climate data"
+            git push
+          fi

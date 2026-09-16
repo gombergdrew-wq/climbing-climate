@@ -28,3 +28,9 @@ const CLIMBING_AREAS = [
 
 const DEFAULT_SELECTED_IDS = ["yosemite", "chamonix", "kalymnos", "joshua-tree"];
 const MAX_SELECTED = 5;
+
+// Also usable from Node (the data-fetch script) without affecting the
+// browser, where `module` is undefined and this is just skipped.
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { CLIMBING_AREAS, DEFAULT_SELECTED_IDS, MAX_SELECTED };
+}

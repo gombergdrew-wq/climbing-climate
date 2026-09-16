@@ -1,12 +1,13 @@
 (function () {
   const { METRICS, metricByKey, TIME_OF_YEAR_PRESETS, timeOfYearById,
-    START_YEAR, END_YEAR, BASELINE_RANGE, RECENT_RANGE,
-    ensureMonthlyData, deriveYearly, linearFit, trendPerDecade, averageOverRange, valueToDisplay,
+    loadAllData, deriveYearly, linearFit, trendPerDecade, averageOverRange, valueToDisplay,
     celsiusDeltaToDisplay, unitLabel } = window.ClimateData;
 
   const PALETTE_VARS = ["--series-1", "--series-2", "--series-3", "--series-4", "--series-5"];
-  const YEARS = [];
-  for (let y = START_YEAR; y <= END_YEAR; y++) YEARS.push(y);
+
+  // Populated once the dataset loads (see loadData()) — everything that
+  // needs them runs only after that succeeds.
+  let START_YEAR, END_YEAR, BASELINE_RANGE, RECENT_RANGE, YEARS;
 
   const state = {
     selectedOrder: DEFAULT_SELECTED_IDS.slice(0, MAX_SELECTED),
@@ -15,6 +16,7 @@
     unit: "C",
     monthlyById: new Map(),
     failedIds: new Set(),
+    generatedAt: null,
   };
 
   const els = {};
@@ -22,7 +24,7 @@
     "trendChart", "trendTable", "trendTitle", "trendSub",
     "decadeChart", "decadeTable", "decadeTitle", "decadeSub",
     "rankingChart", "rankingTable", "rankingSub",
-    "areaCount", "areaCount2", "yearRange", "maxSelected"].forEach((id) => {
+    "areaCount", "areaCount2", "yearRange", "maxSelected", "dataFreshness"].forEach((id) => {
     els[id] = document.getElementById(id);
   });
 
@@ -105,8 +107,16 @@
   function initChrome() {
     els.areaCount.textContent = String(CLIMBING_AREAS.length);
     els.areaCount2.textContent = String(CLIMBING_AREAS.length);
-    els.yearRange.textContent = `${START_YEAR}–${END_YEAR}`;
     els.maxSelected.textContent = String(MAX_SELECTED);
+  }
+
+  // Called once the dataset has loaded and START_YEAR/END_YEAR are known.
+  function renderDataChrome() {
+    els.yearRange.textContent = `${START_YEAR}–${END_YEAR}`;
+    if (els.dataFreshness && state.generatedAt) {
+      const d = new Date(state.generatedAt);
+      els.dataFreshness.textContent = `Data updated ${d.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}.`;
+    }
   }
 
   function renderAreaGrid() {
@@ -237,23 +247,30 @@
   // ---------- Data loading ----------
 
   async function loadData() {
-    setStatus("loading", `Loading ${YEARS.length} years of daily weather for ${CLIMBING_AREAS.length} climbing areas from Open-Meteo…`);
+    setStatus("loading", "Loading 30 years of climbing-area climate data…");
     try {
-      const results = await ensureMonthlyData(CLIMBING_AREAS);
-      state.monthlyById = results;
-      state.failedIds = new Set(CLIMBING_AREAS.filter((a) => !results.has(a.id)).map((a) => a.id));
-      if (state.failedIds.size === CLIMBING_AREAS.length) {
-        throw new Error("No areas returned data");
-      }
+      const data = await loadAllData();
+      START_YEAR = data.startYear;
+      END_YEAR = data.endYear;
+      BASELINE_RANGE = [START_YEAR, START_YEAR + 9];
+      RECENT_RANGE = [END_YEAR - 9, END_YEAR];
+      YEARS = [];
+      for (let y = START_YEAR; y <= END_YEAR; y++) YEARS.push(y);
+
+      state.monthlyById = new Map(Object.entries(data.areas));
+      state.generatedAt = data.generatedAt;
+      state.failedIds = new Set(CLIMBING_AREAS.filter((a) => !state.monthlyById.has(a.id)).map((a) => a.id));
+
+      renderDataChrome();
       if (state.failedIds.size > 0) {
         const names = [...state.failedIds].map((id) => areaById(id).name).join(", ");
-        setStatus("warning", `Loaded, but couldn't get data for: ${names}.`);
+        setStatus("warning", `Loaded, but the dataset is missing: ${names}. It'll be filled in on the next monthly refresh.`);
       } else {
         setStatus(null);
       }
       renderAll();
     } catch (err) {
-      setStatus("error", `Couldn't load weather data (${err.message}). This app fetches live from Open-Meteo in your browser — check your connection or an ad/tracker blocker that might be blocking archive-api.open-meteo.com, then <button type="button" id="retryBtn" style="cursor:pointer">retry</button>.`);
+      setStatus("error", `Couldn't load the climate dataset (${err.message}). <button type="button" id="retryBtn" style="cursor:pointer">retry</button>.`);
       const retry = document.getElementById("retryBtn");
       if (retry) retry.addEventListener("click", loadData);
     }

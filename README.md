@@ -9,28 +9,34 @@ GitHub Pages is enabled — see below).
 
 ## How it works
 
-This is a fully static site — plain HTML/CSS/JS, no build step, no backend,
-no pre-baked data files. When you load the page, your browser fetches 30
-years of daily temperature/precipitation/snowfall directly from the free
-[Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)
-(derived from the ECMWF ERA5 reanalysis) for every area — one batched
-request — then computes everything client-side:
+This is a static site — plain HTML/CSS/JS — backed by a small data pipeline
+instead of live API calls from every visitor's browser:
 
-- Per-month averages/counts per area (avg high/low, freezing days, "prime
-  climbing days," days too hot to send, precipitation, snowfall)
-- A linear trend (change per decade) per area and metric, for the whole
-  year or for just a chosen month/season
+1. **`scripts/fetch-data.js`** (Node) fetches 30 years of daily
+   temperature/precipitation/snowfall for all 22 areas from the free
+   [Open-Meteo Historical Weather API](https://open-meteo.com/en/docs/historical-weather-api)
+   (ERA5 reanalysis), reduces it to compact per-(year, month) sums/counts,
+   and writes **`data/monthly.json`**.
+2. **`.github/workflows/update-data.yml`** runs that script on a schedule
+   (monthly — climate data doesn't move fast) and on demand, and commits the
+   refreshed `data/monthly.json` back to the repo.
+3. The site itself just fetches that one same-origin JSON file and does
+   everything else — deriving whole-year or month/season stats, linear
+   trends, decade comparisons, the global ranking — client-side in
+   `climate.js`/`app.js`.
+
+That means visitors' browsers never talk to Open-Meteo directly: no
+cross-origin rate limits, no per-visitor reliability risk, and page load is
+one small static fetch instead of 22 live API calls. The "database" is just
+a JSON file kept fresh by CI — no server to run, nothing to pay for.
+
+- Pick up to 5 areas, any metric, any time of year (whole year, a season,
+  or a single month), °C or °F — every chart recomputes instantly from the
+  already-loaded dataset.
+- A linear trend (change per decade) per area and metric.
 - Baseline decade (first 10 years) vs. recent decade (last 10 years)
-  comparisons
-- A global ranking of all 22 areas by warming trend for the selected metric
-
-Daily data is reduced to per-(year, month) sums/counts before caching in
-`localStorage` — compact, and enough to derive a whole-year view *or* any
-month/season view (e.g. "just October," "just Winter") without re-fetching.
-Because everything runs in the browser, the charts are genuinely dynamic —
-pick any combination of up to 5 areas, any metric, any time of year, °C or
-°F — with no server to keep running and nothing to redeploy when the "data"
-changes (there isn't any to redeploy; it's always live).
+  comparisons.
+- A global ranking of all 22 areas by warming trend for the selected metric.
 
 Season presets (Winter/Spring/Summer/Fall) use fixed Northern-Hemisphere
 calendar months for every area, rather than flipping per hemisphere, so a
@@ -58,33 +64,48 @@ and not a peer-reviewed climate product.
 
 ## Running locally
 
-No install needed — it's static files:
+The site itself needs no install — it's static files — but it does need
+`data/monthly.json` to exist (it's committed to the repo, so a normal clone
+already has it):
 
 ```bash
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
+To refresh the data yourself (Node 18+, needs internet access):
+
+```bash
+node scripts/fetch-data.js
+```
+
 ## Deploying (GitHub Pages)
 
-This repo has no build step, so Pages just needs to be pointed at the
-branch. One-time setup:
+This repo has no build step for the site itself, so Pages just needs to be
+pointed at the branch. One-time setup:
 
 1. On GitHub: **Settings → Pages**
 2. Under **Build and deployment → Source**, choose **Deploy from a branch**
 3. Branch: `main`, folder: `/ (root)` → **Save**
 
 GitHub will publish the site at `https://<you>.github.io/climbing-climate/`
-within a minute or two, and re-publish automatically on every push to `main`.
+within a minute or two, and re-publish automatically on every push to
+`main` — including the automated data-refresh commits.
 
 ## Project layout
 
 - `index.html` — page structure
 - `styles.css` — theme (light/dark aware), layout, chart chrome
-- `areas.js` — the roster of 22 climbing areas (name, coordinates, style)
-- `climate.js` — fetching, caching, and aggregating Open-Meteo data into
-  yearly stats; has no DOM dependencies
+- `areas.js` — the roster of 22 climbing areas (name, coordinates, style);
+  also `require()`-able from Node for the fetch script
+- `climate.js` — loads `data/monthly.json` and derives yearly/seasonal
+  stats, trends, and decade comparisons; has no DOM dependencies
 - `app.js` — UI wiring and Chart.js rendering
+- `data/monthly.json` — the pre-built dataset (generated, not hand-edited)
+- `scripts/fetch-data.js` — the Node script that builds `data/monthly.json`
+  from Open-Meteo
+- `.github/workflows/update-data.yml` — runs that script monthly and on
+  demand, committing the result
 - `vendor/chart.umd.js` — [Chart.js](https://www.chartjs.org/) (MIT),
   vendored locally instead of loaded from a CDN
 
@@ -92,5 +113,6 @@ within a minute or two, and re-publish automatically on every push to `main`.
 
 Add an entry to the `CLIMBING_AREAS` array in `areas.js` with an `id`,
 `name`, `country`, `continent`, `lat`/`lon`, optional `elevationM`, and a
-short `style` tag. No other changes needed — it'll show up in the picker and
-the global ranking automatically.
+short `style` tag, then run `node scripts/fetch-data.js` (or push — the
+workflow re-runs automatically when `areas.js` changes) to pull its data.
+It'll then show up in the picker and the global ranking automatically.

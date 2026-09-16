@@ -1,21 +1,11 @@
-// Fetches, caches, and aggregates historical daily weather into
-// climbing-relevant stats. Everything here runs in the visitor's browser —
-// there is no build-time data and no backend; Open-Meteo's archive API
-// (ERA5 reanalysis, free, no key, CORS-enabled) is queried directly, one
-// area at a time. Raw daily data is reduced to per-month sums/counts before
-// caching (small, and enough to derive a whole-year OR a month/season view
-// without re-fetching).
+// Loads the pre-built climate dataset (data/monthly.json, produced by
+// scripts/fetch-data.js and refreshed monthly by a GitHub Action — see
+// .github/workflows/update-data.yml) and derives climbing-relevant stats
+// from it. The browser never talks to Open-Meteo directly: it fetches this
+// one same-origin JSON file, which is fast and doesn't depend on every
+// visitor's browser making 22 live cross-origin requests.
 
-const ARCHIVE_BASE = "https://archive-api.open-meteo.com/v1/archive";
-const CACHE_PREFIX = "crag-climate:v2:";
-const FETCH_CONCURRENCY = 4; // keep well under Open-Meteo's free-tier burst limit
-const MAX_RETRIES = 2;
-
-const THIS_YEAR = new Date().getFullYear();
-const END_YEAR = THIS_YEAR - 1; // last fully-elapsed year
-const START_YEAR = END_YEAR - 29; // 30 years total, inclusive
-const BASELINE_RANGE = [START_YEAR, START_YEAR + 9]; // first decade
-const RECENT_RANGE = [END_YEAR - 9, END_YEAR]; // most recent decade
+const DATA_URL = "data/monthly.json";
 
 const METRICS = [
   { key: "meanHigh", label: "Avg daily high", shortLabel: "Avg high", unitC: "°C", kind: "temp", warmingIsUp: true },
@@ -69,192 +59,23 @@ function unitLabel(metric, unit) {
   return metric.unitC;
 }
 
-function buildUrl(area) {
-  const params = new URLSearchParams({
-    latitude: area.lat,
-    longitude: area.lon,
-    start_date: `${START_YEAR}-01-01`,
-    end_date: `${END_YEAR}-12-31`,
-    daily: "temperature_2m_max,temperature_2m_min,precipitation_sum,snowfall_sum",
-    timezone: "UTC",
-  });
-  return `${ARCHIVE_BASE}?${params.toString()}`;
-}
-
-function cacheKey(areaId) {
-  return `${CACHE_PREFIX}${areaId}:${START_YEAR}-${END_YEAR}`;
-}
-
-function readCache(areaId) {
-  try {
-    const raw = localStorage.getItem(cacheKey(areaId));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed.monthly)) return null;
-    return parsed.monthly;
-  } catch (err) {
-    return null;
-  }
-}
-
-function writeCache(areaId, monthly) {
-  try {
-    localStorage.setItem(cacheKey(areaId), JSON.stringify({ monthly }));
-  } catch (err) {
-    // Storage full or unavailable (private browsing) — non-fatal, just skip caching.
-  }
-}
-
-// Turns the raw Open-Meteo `daily` arrays into one row of running
-// sums/counts per (year, month) — compact, and enough to derive any
-// whole-year or month/season view later without re-fetching.
-function aggregateMonthly(daily) {
-  const byYearMonth = new Map();
-  for (let i = 0; i < daily.time.length; i++) {
-    const year = Number(daily.time[i].slice(0, 4));
-    const month = Number(daily.time[i].slice(5, 7));
-    const k = `${year}-${month}`;
-    if (!byYearMonth.has(k)) {
-      byYearMonth.set(k, {
-        year, month,
-        highSum: 0, highCount: 0,
-        lowSum: 0, lowCount: 0,
-        freezeDays: 0, hotDays: 0, primeDays: 0,
-        totalPrecip: 0, precipCount: 0,
-        totalSnowfall: 0, snowCount: 0,
-      });
-    }
-    const row = byYearMonth.get(k);
-    const high = daily.temperature_2m_max[i];
-    const low = daily.temperature_2m_min[i];
-    const precip = daily.precipitation_sum[i];
-    const snow = daily.snowfall_sum[i];
-
-    if (high != null) {
-      row.highSum += high;
-      row.highCount++;
-      if (high > 32) row.hotDays++;
-      if (high >= 10 && high <= 24) row.primeDays++;
-    }
-    if (low != null) {
-      row.lowSum += low;
-      row.lowCount++;
-      if (low < 0) row.freezeDays++;
-    }
-    if (precip != null) {
-      row.totalPrecip += precip;
-      row.precipCount++;
-    }
-    if (snow != null) {
-      row.totalSnowfall += snow;
-      row.snowCount++;
-    }
-  }
-  return Array.from(byYearMonth.values());
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function fetchOneRaw(area) {
+// Fetches the pre-built dataset. Returns { generatedAt, startYear, endYear,
+// areas: { areaId: monthlyRows[] } }.
+async function loadAllData() {
   let res;
   try {
-    res = await fetch(buildUrl(area));
+    res = await fetch(DATA_URL, { cache: "no-cache" });
   } catch (err) {
-    const netErr = new Error(`${area.name}: network error (${err.message})`);
-    netErr.retryable = true;
-    throw netErr;
+    throw new Error(`network error loading ${DATA_URL} (${err.message})`);
   }
   if (!res.ok) {
-    let reason = `HTTP ${res.status}`;
-    try {
-      const errJson = await res.json();
-      if (errJson && errJson.reason) reason = errJson.reason;
-    } catch (err) {
-      // body wasn't JSON — keep the generic HTTP status reason
-    }
-    const httpErr = new Error(`${area.name}: ${reason}`);
-    httpErr.retryable = res.status === 429 || res.status >= 500;
-    throw httpErr;
+    throw new Error(`${DATA_URL} returned HTTP ${res.status}`);
   }
   const json = await res.json();
-  if (!json.daily || !Array.isArray(json.daily.time) || json.daily.time.length === 0) {
-    const emptyErr = new Error(`${area.name}: no data returned`);
-    emptyErr.retryable = false;
-    throw emptyErr;
+  if (!json || typeof json.areas !== "object" || !json.startYear || !json.endYear) {
+    throw new Error(`${DATA_URL} is malformed`);
   }
-  return json.daily;
-}
-
-async function fetchOneMonthly(area) {
-  let lastErr;
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const daily = await fetchOneRaw(area);
-      const monthly = aggregateMonthly(daily);
-      writeCache(area.id, monthly);
-      return monthly;
-    } catch (err) {
-      lastErr = err;
-      if (!err.retryable || attempt === MAX_RETRIES) break;
-      await delay(500 * 2 ** attempt + Math.random() * 300);
-    }
-  }
-  throw lastErr;
-}
-
-// Runs `fn` over `items` with at most `limit` in flight at once (Open-Meteo's
-// free tier rate-limits bursts, so fetching all 22 areas at once as one big
-// Promise.all was tripping that limit for a lot of them).
-async function mapWithConcurrency(items, limit, fn) {
-  const results = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      try {
-        results[i] = { status: "fulfilled", value: await fn(items[i], i) };
-      } catch (err) {
-        results[i] = { status: "rejected", reason: err };
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
-// Fetches monthly stats for whichever of `areas` aren't already cached
-// (throttled + retried), and returns a Map of areaId -> monthly rows for
-// every area that succeeded. Areas that fail are simply left out — the
-// caller treats a missing id as "couldn't load this one."
-async function ensureMonthlyData(areas) {
-  const results = new Map();
-  const needed = [];
-  for (const area of areas) {
-    const cached = readCache(area.id);
-    if (cached) {
-      results.set(area.id, cached);
-    } else {
-      needed.push(area);
-    }
-  }
-  if (needed.length === 0) return results;
-
-  const settled = await mapWithConcurrency(needed, FETCH_CONCURRENCY, (area) => fetchOneMonthly(area));
-  let firstError = null;
-  settled.forEach((outcome, i) => {
-    if (outcome.status === "fulfilled") {
-      results.set(needed[i].id, outcome.value);
-    } else if (!firstError) {
-      firstError = outcome.reason;
-    }
-  });
-
-  if (results.size === 0 && firstError) {
-    throw firstError;
-  }
-  return results;
+  return json;
 }
 
 function monthInRange(month, from, to) {
@@ -363,11 +184,7 @@ window.ClimateData = {
   metricByKey,
   TIME_OF_YEAR_PRESETS,
   timeOfYearById,
-  START_YEAR,
-  END_YEAR,
-  BASELINE_RANGE,
-  RECENT_RANGE,
-  ensureMonthlyData,
+  loadAllData,
   deriveYearly,
   linearFit,
   trendPerDecade,
