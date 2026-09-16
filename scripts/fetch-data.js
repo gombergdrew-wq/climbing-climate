@@ -12,8 +12,15 @@ const path = require("path");
 const { CLIMBING_AREAS } = require("../areas.js");
 
 const ARCHIVE_BASE = "https://archive-api.open-meteo.com/v1/archive";
-const CONCURRENCY = 4; // stay well under Open-Meteo's free-tier burst limit
-const MAX_RETRIES = 5; // CI can afford to be patient; this isn't a live visitor waiting
+// A 30-year, 4-variable daily request is "expensive" against Open-Meteo's
+// weighted per-minute quota — 4 concurrent requests tripped its "Minutely
+// API request limit exceeded" error almost immediately in practice. Fetch
+// fully serially with pacing between requests instead of trying to be fast;
+// this is a monthly CI job, not a page load, so there's no rush.
+const CONCURRENCY = 1;
+const REQUEST_PACING_MS = 5000; // wait this long between the start of each area's request
+const MAX_RETRIES = 4; // CI can afford to be patient; this isn't a live visitor waiting
+const RATE_LIMIT_WAIT_MS = 65000; // Open-Meteo's own message says "try again in one minute"
 
 const END_YEAR = new Date().getFullYear() - 1; // last fully-elapsed year
 const START_YEAR = END_YEAR - 29; // 30 years total, inclusive
@@ -96,7 +103,8 @@ async function fetchArea(area) {
           // body wasn't JSON — keep the generic HTTP status reason
         }
         const err = new Error(`${area.name}: ${reason}`);
-        err.retryable = res.status === 429 || res.status >= 500;
+        err.rateLimited = res.status === 429 || /API request limit exceeded/i.test(reason);
+        err.retryable = err.rateLimited || res.status >= 500;
         throw err;
       }
       const json = await res.json();
@@ -107,7 +115,7 @@ async function fetchArea(area) {
     } catch (err) {
       lastErr = err;
       if (err.retryable === false || attempt === MAX_RETRIES) break;
-      const wait = Math.round(800 * 2 ** attempt + Math.random() * 400);
+      const wait = err.rateLimited ? RATE_LIMIT_WAIT_MS : Math.round(800 * 2 ** attempt + Math.random() * 400);
       console.warn(`  retrying ${area.name} in ${wait}ms (attempt ${attempt + 2}/${MAX_RETRIES + 1}): ${err.message}`);
       await delay(wait);
     }
@@ -121,6 +129,7 @@ async function mapWithConcurrency(items, limit, fn) {
     while (next < items.length) {
       const i = next++;
       await fn(items[i], i);
+      if (next < items.length) await delay(REQUEST_PACING_MS);
     }
   }
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
